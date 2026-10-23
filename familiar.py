@@ -131,6 +131,7 @@ familiar_image = null
 group_flag = false
 group_value = null
 element = null
+spellcasting_ability = null
 
 i = 0
 while i < len(tokens):
@@ -140,7 +141,7 @@ while i < len(tokens):
     inline_value = pair[1]
     flag = strip_flag(flag_token).lower()
 
-    if flag in ["type", "name", "image", "img", "thumb", "group", "element", "damage", "dc"]:
+    if flag in ["type", "name", "image", "img", "thumb", "group", "element", "damage", "dc", "mod"]:
         value = inline_value
 
         if value == null and i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
@@ -158,6 +159,8 @@ while i < len(tokens):
             group_value = value
         elif flag in ["element", "damage"]:
             element = value
+        elif flag == "mod":
+            spellcasting_ability = value
 
     else:
         passthrough.append(token)
@@ -175,6 +178,18 @@ if not familiar_image:
 
 if not element:
     element = args.last("element", args.last("damage"))
+
+if not spellcasting_ability:
+    spellcasting_ability = familiar_data.get("mod", "")
+
+spellcasting_ability = str(spellcasting_ability).lower()
+
+if spellcasting_ability and spellcasting_ability not in ["int", "wis", "cha"]:
+    return embed_msg(
+        "Woopsie!",
+        "Spellcasting ability must be Intelligence, Wisdom, or Charisma: `-mod int|wis|cha`.",
+        familiar_image
+    )
 
 # ============================================================================
 # GROUP PREFERENCE
@@ -234,8 +249,16 @@ if element and element not in valid_elements:
     element = ""
 
 pb = int(proficiencyBonus)
-spellbook_dc = ch.spellbook.dc if ch.spellbook.dc else 8 + pb
-spell_dc = int(args.last("dc", spellbook_dc))
+
+if spellcasting_ability:
+    spellcasting_bonus = ch.stats.get_mod(spellcasting_ability)
+    spell_attack_bonus = spellcasting_bonus + pb
+    spell_dc = 8 + spellcasting_bonus + pb
+else:
+    spell_attack_bonus = ch.spellbook.sab
+    spellbook_dc = ch.spellbook.dc if ch.spellbook.dc else 8 + pb
+    spell_dc = int(args.last("dc", spellbook_dc))
+
 char_level = int(ch.levels.total_level)
 
 
@@ -281,13 +304,15 @@ if feature_lines:
 
 details_desc = "\n".join(detail_lines)
 
-stored_familiar_data = {
-    "type": familiar_type,
-    "name": familiar_name
-}
+stored_familiar_data = familiar_data
+stored_familiar_data["type"] = familiar_type
+stored_familiar_data["name"] = familiar_name
 
 if familiar_image:
     stored_familiar_data["image"] = familiar_image
+
+if spellcasting_ability:
+    stored_familiar_data["mod"] = spellcasting_ability
 
 ch.set_cvar("familiarData", dump_json(stored_familiar_data))
 

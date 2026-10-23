@@ -51,6 +51,10 @@ meta = load_json(raw_meta)
 # ============================================================================
 
 prefs = load_json(ch.get_cvar("battlefamiliar", "{}"))
+familiar_data = load_json(ch.get_cvar("familiarData", "{}"))
+
+if not familiar_data:
+    familiar_data = {}
 
 # ============================================================================
 # END / REVERT BATTLE FAMILIAR
@@ -316,6 +320,17 @@ return '-title "Battle Familiar Ends" -desc "{original_name} returns to its norm
 spell_level = args.last("l", MIN_LEVEL, int)
 ignore = args.last("i")
 
+warlike_counters = [
+    cc for cc in ch.consumables
+    if cc.name.lower().startswith("warlike familiar")
+]
+warlike_counter = warlike_counters[0] if warlike_counters else null
+use_warlike_counter = (
+    not ignore
+    and warlike_counter
+    and warlike_counter.value > 0
+)
+
 if spell_level < MIN_LEVEL:
     return f"""embed
 -title "Woopsie!"
@@ -346,8 +361,23 @@ Your choice will be remembered for this character."
 
 form = choice.title()
 
-sab = int(args.last("mod", ch.spellbook.sab))
-sdc = int(args.last("dc", ch.spellbook.dc))
+spellcasting_ability = str(args.last("mod",familiar_data.get("mod", ""))).lower()
+
+if spellcasting_ability and spellcasting_ability not in ["int", "wis", "cha"]:
+    return """embed
+-title "Woopsie!"
+-desc "Spellcasting ability must be Intelligence, Wisdom, or Charisma: `-mod int|wis|cha`."
+"""
+
+if spellcasting_ability:
+    spellcasting_bonus = ch.stats.get_mod(spellcasting_ability)
+    sab = spellcasting_bonus + int(proficiencyBonus)
+    sdc = 8 + spellcasting_bonus + int(proficiencyBonus)
+    familiar_data["mod"] = spellcasting_ability
+    ch.set_cvar("familiarData", dump_json(familiar_data))
+else:
+    sab = int(ch.spellbook.sab)
+    sdc = int(args.last("dc", ch.spellbook.dc))
 
 # Warlock pact-slot convenience retained from the Summon Beast alias.
 warlock = ch.levels.get("Warlock")
@@ -422,25 +452,29 @@ prefs["name"] = preferred_name
 ch.set_cvar("battlefamiliar", dump_json(prefs))
 
 # ============================================================================
-# SPELL SLOT
+# CASTING RESOURCE
 # ============================================================================
 
 if not ignore:
 
-    if not ch.spellbook.get_slots(spell_level):
-        return f"""embed
+    if use_warlike_counter:
+        warlike_counter.mod(-1, strict=true)
+
+    else:
+        if not ch.spellbook.get_slots(spell_level):
+            return f"""embed
 -title "Woopsie!"
 -desc "You don't have any level {spell_level} spell slots left!"
 -f "Spell Slots|{ch.spellbook.slots_str(spell_level)}"
 """
 
-    if not ch.spellbook.can_cast(SPELL_NAME, spell_level):
-        return f"""embed
+        if not ch.spellbook.can_cast(SPELL_NAME, spell_level):
+            return f"""embed
 -title "Woopsie!"
 -desc "You don't have {SPELL_NAME} prepared!"
 """
 
-    ch.spellbook.use_slot(spell_level)
+        ch.spellbook.use_slot(spell_level)
 
 # ============================================================================
 # STAT BLOCK
@@ -847,6 +881,20 @@ summon_command = init_add.build_init_add(
 # Keep the visible effect name concise.
 # ---------------------------------------------------------------------------
 
+if use_warlike_counter:
+    resource_field = {
+        "title": warlike_counter.name,
+        "desc": str(warlike_counter)
+    }
+else:
+    resource_field = {
+        "title": "Spell Slots",
+        "desc": (
+            f"{ch.spellbook.slots_str(spell_level)} "
+            f"{'(-1)' if not ignore else ''}"
+        )
+    }
+
 embed_args = {
     "title": f"{name} summons a {form} Battle Familiar!",
     "desc": SPELL_DESC,
@@ -865,13 +913,7 @@ embed_args = {
             "title": "Condition Immunities",
             "desc": "Charmed, Frightened"
         },
-        {
-            "title": "Spell Slots",
-            "desc": (
-                f"{ch.spellbook.slots_str(spell_level)} "
-                f"{'(-1)' if not ignore else ''}"
-            )
-        }
+        resource_field
     ],
 
     "footer": f"{ctx.prefix+ctx.alias}",
